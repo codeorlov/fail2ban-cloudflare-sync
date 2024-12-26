@@ -1,2 +1,2 @@
 # fail2ban-cloudflare-sync
-This script synchronizes blocked IPs from Fail2Ban on your server with a Cloudflare IP list and automatically applies WAF rules to block malicious IPs.
+This Bash script synchronizes IPs blocked by Fail2Ban on your Plesk server with Cloudflare. It updates a Cloudflare IP list and creates or verifies WAF rules to block the identified IPs.
