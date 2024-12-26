@@ -1,6 +1,6 @@
-# Cloudflare Fail2Ban IP Sync
+# Fail2Ban Cloudflare IP Sync for Plesk
 
-A bash script that automatically synchronizes blocked IP addresses from Fail2Ban to Cloudflare's IP Access Rules. This helps extend your server's security by blocking malicious IPs at the Cloudflare edge network level.
+A bash script that automatically synchronizes blocked IP addresses from Fail2Ban to Cloudflare's IP Access Rules, designed for Plesk servers. This helps extend your server's security by blocking malicious IPs at the Cloudflare edge network level.
 
 ## Features
 
@@ -10,9 +10,11 @@ A bash script that automatically synchronizes blocked IP addresses from Fail2Ban
 - Supports multiple domains
 - Detailed logging of all operations
 - Easy configuration through a simple array
+- Optimized for Plesk server environments
 
 ## Prerequisites
 
+- Plesk server
 - Bash shell
 - `iptables`
 - `jq` for JSON processing
@@ -50,7 +52,7 @@ chmod +x cloudflare-fail2ban-sync.sh
 ./cloudflare-fail2ban-sync.sh
 ```
 
-For automated execution, add it to your crontab:
+For automated execution, add it to your Plesk server's crontab:
 ```bash
 # Run every hour
 0 * * * * /path/to/cloudflare-fail2ban-sync.sh
@@ -58,7 +60,7 @@ For automated execution, add it to your crontab:
 
 ## How It Works
 
-1. Retrieves blocked IP addresses from all Fail2Ban chains
+1. Retrieves blocked IP addresses from all Fail2Ban chains in Plesk
 2. Creates or updates an IP list in Cloudflare for each configured domain
 3. Creates WAF rules that block requests from listed IPs
 4. Logs all operations with timestamps
@@ -76,7 +78,4 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 - Keep your API credentials secure
 - Review blocked IPs periodically to prevent false positives
 - Consider the impact on legitimate users before deployment
-
-## Author
-
-Eugene Orlov
+- Ensure proper Fail2Ban configuration in your Plesk server
