@@ -1,4 +1,4 @@
-# Fail2Ban Cloudflare IP Sync for Plesk
+# Fail2Ban Cloudflare Sync for Plesk
 
 A bash script that automatically synchronizes blocked IP addresses from Fail2Ban to Cloudflare's IP Access Rules, designed for Plesk servers. This helps extend your server's security by blocking malicious IPs at the Cloudflare edge network level.
 
