@@ -48,6 +48,7 @@ get_fail2ban_ips() {
 get_or_create_list() {
     local domain=$1
     local response
+
     # Request the list of existing Cloudflare lists
     response=$($CURL -s -X GET \
         -H "X-Auth-Email: ${CONFIG["$domain;email"]}" \
@@ -55,9 +56,21 @@ get_or_create_list() {
         -H "Content-Type: application/json" \
         "https://api.cloudflare.com/client/v4/accounts/${CONFIG["$domain;account_id"]}/rules/lists")
 
+    if [ -z "$response" ]; then
+        log "Error: Empty response from Cloudflare API for $domain when requesting lists"
+        return 1
+    fi
+
+    local success
+    success=$(echo "$response" | $JQ -r '.success')
+    if [ "$success" != "true" ]; then
+        log "Cloudflare API error for $domain: $(echo "$response" | $JQ -r '.errors[]?.message // "Unknown error"')"
+        return 1
+    fi
+
     # Check if the list with the given name exists
     local list_id
-    list_id=$(echo "$response" | $JQ -r ".result[] | select(.name == \"$LIST_NAME\") | .id")
+    list_id=$(echo "$response" | $JQ -r '.result[] | select(.name == "'"$LIST_NAME"'") | .id' 2>/dev/null)
 
     # Create a new list if it doesn't exist
     if [ -z "$list_id" ]; then
@@ -68,7 +81,23 @@ get_or_create_list() {
             -H "Content-Type: application/json" \
             -d "{\"name\":\"$LIST_NAME\",\"kind\":\"ip\",\"description\":\"Blocked IPs from Plesk\"}" \
             "https://api.cloudflare.com/client/v4/accounts/${CONFIG["$domain;account_id"]}/rules/lists")
-        list_id=$(echo "$response" | $JQ -r '.result.id')
+
+        if [ -z "$response" ]; then
+            log "Error: Empty response when creating list for $domain"
+            return 1
+        fi
+
+        success=$(echo "$response" | $JQ -r '.success')
+        if [ "$success" != "true" ]; then
+            log "Error creating list for $domain: $(echo "$response" | $JQ -r '.errors[]?.message // "Unknown error"')"
+            return 1
+        fi
+
+        list_id=$(echo "$response" | $JQ -r '.result.id // ""')
+        if [ -z "$list_id" ]; then
+            log "Failed to retrieve ID of the new list for $domain"
+            return 1
+        fi
     fi
 
     echo "$list_id"
@@ -85,18 +114,28 @@ update_list() {
     for ip in $ips; do
         json_data+="{\"ip\":\"$ip\",\"comment\":\"Blocked by Fail2Ban\"},"
     done
-
-    # Remove the trailing comma and close the JSON array
-    json_data=${json_data%,}] 
+    json_data=${json_data%,}]
 
     log "Updating IP list for $domain..."
-    # Send the request to update the IP list
-    $CURL -s -X PUT \
+    local response
+    response=$($CURL -s -X PUT \
         -H "X-Auth-Email: ${CONFIG["$domain;email"]}" \
         -H "X-Auth-Key: ${CONFIG["$domain;api_key"]}" \
         -H "Content-Type: application/json" \
         -d "$json_data" \
-        "https://api.cloudflare.com/client/v4/accounts/${CONFIG["$domain;account_id"]}/rules/lists/$list_id/items" > /dev/null
+        "https://api.cloudflare.com/client/v4/accounts/${CONFIG["$domain;account_id"]}/rules/lists/$list_id/items")
+
+    if [ -z "$response" ]; then
+        log "Error: Empty response when updating list for $domain"
+        return 1
+    fi
+
+    local success
+    success=$(echo "$response" | $JQ -r '.success')
+    if [ "$success" != "true" ]; then
+        log "Error updating list for $domain: $(echo "$response" | $JQ -r '.errors[]?.message // "Unknown error"')"
+        return 1
+    fi
 
     log "IP list successfully updated for $domain."
 }
@@ -114,15 +153,38 @@ create_waf_rule() {
         -H "Content-Type: application/json" \
         "https://api.cloudflare.com/client/v4/zones/${CONFIG["$domain;zone_id"]}/firewall/rules")
 
+    if [ -z "$response" ]; then
+        log "Error: Empty response when requesting WAF rules for $domain"
+        return 1
+    fi
+
+    local success
+    success=$(echo "$response" | $JQ -r '.success')
+    if [ "$success" != "true" ]; then
+        log "Error requesting WAF rules for $domain: $(echo "$response" | $JQ -r '.errors[]?.message // "Unknown error"')"
+        return 1
+    fi
+
     # Create a new rule if one with the same description doesn't exist
-    if ! echo "$response" | $JQ -e ".result[] | select(.description == \"$RULE_NAME\")" > /dev/null; then
+    if ! echo "$response" | $JQ -e ".result[] | select(.description == \"$RULE_NAME\")" > /dev/null 2>&1; then
         log "Creating WAF rule for $domain..."
-        $CURL -s -X POST \
+        response=$($CURL -s -X POST \
             -H "X-Auth-Email: ${CONFIG["$domain;email"]}" \
             -H "X-Auth-Key: ${CONFIG["$domain;api_key"]}" \
             -H "Content-Type: application/json" \
             -d "[{\"action\":\"block\",\"description\":\"$RULE_NAME\",\"priority\":1,\"filter\":{\"expression\":\"ip.src in \$$list_name\",\"paused\":false,\"description\":\"Filter Fail2Ban IPs\"}}]" \
-            "https://api.cloudflare.com/client/v4/zones/${CONFIG["$domain;zone_id"]}/firewall/rules" > /dev/null
+            "https://api.cloudflare.com/client/v4/zones/${CONFIG["$domain;zone_id"]}/firewall/rules")
+
+        if [ -z "$response" ]; then
+            log "Error: Empty response when creating WAF rule for $domain"
+            return 1
+        fi
+
+        success=$(echo "$response" | $JQ -r '.success')
+        if [ "$success" != "true" ]; then
+            log "Error creating WAF rule for $domain: $(echo "$response" | $JQ -r '.errors[]?.message // "Unknown error"')"
+            return 1
+        fi
         log "WAF rule successfully created for $domain."
     else
         log "WAF rule already exists for $domain."
@@ -135,9 +197,26 @@ IPS=$(get_fail2ban_ips)
 IP_COUNT=$(echo "$IPS" | wc -w)
 log "Number of IPs found: $IP_COUNT"
 
+# Flag to skip sleep on the first iteration
+first_iteration=true
+
 for domain in $(echo "${!CONFIG[@]}" | tr ' ' '\n' | cut -d';' -f1 | sort -u); do
+    # Add a 10-second delay between iterations, except for the first one
+    if [ "$first_iteration" = false ]; then
+        log "Waiting 10 seconds before processing the next domain..."
+        sleep 10
+    else
+        first_iteration=false
+    fi
+
     log "Processing domain: $domain"
     LIST_ID=$(get_or_create_list "$domain")
+    if [ -z "$LIST_ID" ]; then
+        log "Skipping $domain due to error in retrieving or creating list"
+        continue
+    fi
+
     update_list "$domain" "$LIST_ID" "$IPS"
     create_waf_rule "$domain" "$LIST_NAME"
     log "Processing complete for $domain"
+done
